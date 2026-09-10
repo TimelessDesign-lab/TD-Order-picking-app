@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Warehouse Picker">
+<link rel="manifest" href="manifest.json">
+<title>Warehouse Picker</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111827}
+header{background:#111827;color:#fff;padding:18px 16px;position:sticky;top:0;z-index:5}h1{margin:0;font-size:21px}.sub{font-size:13px;opacity:.8;margin-top:3px}
+main{max-width:620px;margin:auto;padding:14px}.card{background:#fff;border-radius:18px;padding:17px;margin-bottom:13px;box-shadow:0 2px 10px #0001}
+h2{margin:0 0 8px}.muted{color:#6b7280;font-size:13px}.label{font-size:12px;font-weight:800;color:#6b7280;text-transform:uppercase}
+.product{font-size:23px;font-weight:850;margin:5px 0}.code{font-family:monospace;color:#6b7280}.big{font-size:44px;font-weight:900}
+.row{display:flex;gap:10px}.row>*{flex:1}button,input{font:inherit;border-radius:13px;padding:13px;border:1px solid #d1d5db;width:100%}
+button{background:#111827;color:#fff;border:0;font-weight:800;margin-top:8px;min-height:48px}.secondary{background:#e5e7eb;color:#111827}
+.green{background:#dcfce7;border:3px solid #22c55e;color:#166534}.red{background:#fee2e2;border:3px solid #ef4444;color:#991b1b}
+.status{padding:22px;border-radius:18px;text-align:center;font-weight:900;font-size:25px;margin-bottom:13px}.status small{display:block;font-size:15px;margin-top:7px}
+.hidden{display:none!important}.progress{height:8px;background:#e5e7eb;border-radius:9px;overflow:hidden}.fill{height:100%;background:#22c55e;width:0}
+.reader{margin-top:10px;overflow:hidden;border-radius:12px}.noBarcode{background:#fff7ed;border:2px solid #fb923c;color:#9a3412;border-radius:16px;padding:18px;text-align:center;font-weight:850}
+.done{font-size:26px;color:#166534;font-weight:900;text-align:center}.tag{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:800;background:#e5e7eb}
+.warn{background:#ffedd5;color:#9a3412}.ok{background:#dcfce7;color:#166534}.center{text-align:center}
+</style>
+</head>
+<body>
+<header><h1>📦 Warehouse Picker</h1><div class="sub">Sage Excel → barcode checked picking</div></header>
+<main>
+<section id="home">
+  <div class="card">
+    <h2>Start a Sage order</h2>
+    <p class="muted">Export the sales order from Sage exactly as you do now. The app reads the Excel file and prepares the picking list automatically.</p>
+    <input id="file" type="file" accept=".xlsx,.xls,.csv">
+    <button id="importBtn">Import Sage Excel Order</button>
+    <button class="secondary" id="demoBtn">Try Order 72193 Demo</button>
+  </div>
+  <div id="summary" class="card hidden"></div>
+</section>
+
+<section id="picker" class="hidden">
+  <div class="card">
+    <div class="label">Sales order</div>
+    <div id="order" style="font-size:24px;font-weight:900"></div>
+    <div class="progress" style="margin:10px 0 5px"><div id="fill" class="fill"></div></div>
+    <div id="prog" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <div class="label">Pick this product</div>
+    <div id="desc" class="product"></div>
+    <div id="code" class="code"></div>
+    <div class="row" style="margin-top:15px">
+      <div><div class="label">Required</div><div id="req" class="big"></div></div>
+      <div><div class="label">Picked</div><input id="qty" type="number" min="0" inputmode="numeric" placeholder="Qty"></div>
+    </div>
+  </div>
+
+  <div id="status" class="hidden"></div>
+
+  <div id="nobar" class="noBarcode hidden">
+    ⚠️ NO BARCODE IN SAGE
+    <div id="nobardesc" style="margin-top:7px"></div>
+    <button id="manualPickBtn">✓ Confirm This Product Picked</button>
+  </div>
+
+  <div id="scanCard" class="card">
+    <button id="cameraBtn">📷 Scan Product With Camera</button>
+    <div id="reader" class="reader hidden"></div>
+    <button class="secondary" id="manualBarcodeBtn">Enter Barcode Manually</button>
+    <input id="manual" class="hidden" inputmode="numeric" placeholder="Barcode">
+    <button id="checkManualBtn" class="hidden">Check Barcode</button>
+  </div>
+
+  <div id="finish" class="card hidden">
+    <div class="done">✅ ORDER COMPLETE</div>
+    <p id="finishText" class="muted center"></p>
+    <button id="nextBtn">Next Order</button>
+  </div>
+</section>
+</main>
+
+<script>
+"use strict";
+let items=[], i=0, scanner=null, orderNo="";
+const $ = id => document.getElementById(id);
+const DEMO=[
+{"order":"72193","code":"IAEBRG68","desc":"Brown & Gold 6x8 Frame","barcode":"5391506201370","qty":6},
+{"order":"72193","code":"IAEBRG57","desc":"Brown & Gold 5x7 Frame","barcode":"5391506201363","qty":6},
+{"order":"72193","code":"IAEBRG46","desc":"Brown & Gold 6x4 Frame","barcode":"5391506203602","qty":6},
+{"order":"72193","code":"IAEBK68","desc":"Edge Black 6x8 Frame","barcode":"5391506190483","qty":6},
+{"order":"72193","code":"IAEWH68","desc":"Edge White 6x8 Frame","barcode":"5391506195839","qty":6},
+{"order":"72193","code":"IAEWH57","desc":"Edge White 5x7 Frame","barcode":"5391506195822","qty":6},
+{"order":"72193","code":"SO29FF46","desc":"Photo Fridge Frame 6x4","barcode":"820008872306","qty":36},
+{"order":"72193","code":"SO29FF57","desc":"Photo Fridge Frame 5x7 (24)","barcode":"","qty":24},
+{"order":"72193","code":"ZPM6561","desc":"Zep 6x4 Wood Frame Assorted Colours","barcode":"8020912048695","qty":48},
+{"order":"72193","code":"RRKPW68","desc":"Print Wallets 6x8 (500)","barcode":"","qty":1}
+];
+
+function norm(v){return String(v??"").trim();}
+function setStatus(ok,msg){
+  const s=$("status"); s.className="status "+(ok?"green":"red");
+  s.innerHTML=(ok?"🟢 CORRECT PRODUCT":"🔴 WRONG PRODUCT")+"<small>"+msg+"</small>";
+  if(navigator.vibrate) navigator.vibrate(ok?[70]:[180,70,180]);
+}
+function closeCamera(){
+  if(scanner){scanner.stop().catch(()=>{}); try{scanner.clear()}catch(e){} scanner=null;}
+  $("reader").classList.add("hidden");
+}
+function start(data){
+  items=data.filter(x=>(x.code||x.desc)&&Number(x.qty)>0).map(x=>({...x,qty:Number(x.qty)}));
+  if(!items.length){alert("No picking lines with a positive numeric quantity were found.");return;}
+  orderNo=items[0].order||"Sage Order"; i=0;
+  $("home").classList.add("hidden"); $("picker").classList.remove("hidden");
+  $("order").textContent=orderNo; render();
+}
+function render(){
+  closeCamera();
+  if(i>=items.length){finish();return;}
+  const x=items[i];
+  $("desc").textContent=x.desc||x.code; $("code").textContent="Product code: "+x.code;
+  $("req").textContent=x.qty; $("qty").value=""; $("manual").value="";
+  $("status").className="hidden";
+  const has=!!norm(x.barcode);
+  $("nobar").classList.toggle("hidden",has); $("scanCard").classList.toggle("hidden",!has);
+  if(!has) $("nobardesc").textContent=x.code+" • "+(x.desc||"Product description unavailable");
+  $("prog").textContent=(i+1)+" of "+items.length+" products";
+  $("fill").style.width=(i/items.length*100)+"%";
+}
+function accept(){
+  const x=items[i], q=Number($("qty").value);
+  if(q!==x.qty){setStatus(false,"Quantity mismatch — required "+x.qty+", entered "+(q||0));return;}
+  i++; render();
+}
+function barcode(seen){
+  const x=items[i], a=norm(seen).replace(/\D/g,""), b=norm(x.barcode).replace(/\D/g,"");
+  if(a===b){setStatus(true,x.code+" • "+x.desc);setTimeout(accept,400);}
+  else setStatus(false,"Scanned "+a+"<br>Required "+b);
+}
+async function startCamera(){
+  if(!window.Html5Qrcode){alert("The camera scanner could not load. Connect to the internet and reload.");return;}
+  $("reader").classList.remove("hidden");
+  if(scanner)return;
+  scanner=new Html5Qrcode("reader");
+  try{
+    await scanner.start({facingMode:"environment"},{fps:10,qrbox:{width:280,height:150}},
+      text=>{ if(scanner) barcode(text); }, ()=>{});
+  }catch(e){alert("Camera could not start. Allow camera access, or use manual barcode entry.");closeCamera();}
+}
+function manualBarcode(){$("manual").classList.remove("hidden");$("checkManualBtn").classList.remove("hidden");$("manual").focus();}
+function manualPick(){accept();}
+async function loadFile(){
+  const f=$("file").files[0]; if(!f){alert("Choose the Sage Excel file first.");return;}
+  if(!window.XLSX){alert("The Excel reader could not load. Connect to the internet and reload.");return;}
+  try{
+    const buf=await f.arrayBuffer(), wb=XLSX.read(buf,{type:"array"}), sh=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(sh,{header:1,defval:""});
+    const headerAt=rows.findIndex(r=>r.some(v=>norm(v)==="SalesOrderItem.ProductAccountReference"));
+    if(headerAt<0){alert("I could not find the Sage sales-order columns in this file.");return;}
+    const h=rows[headerAt].map(v=>norm(v)), idx=n=>h.indexOf(n);
+    const oi=idx("SalesOrder.Number"),ci=idx("SalesOrderItem.ProductAccountReference"),di=idx("SalesOrderItem.Description"),qi=idx("SalesOrderItem.Quantity"),bi=idx("ProductRecord.BarCode");
+    if(ci<0||di<0||qi<0){alert("This Sage export is missing one or more required picking columns.");return;}
+    const lines=[];
+    for(const r of rows.slice(headerAt+1)){
+      const code=norm(r[ci]), desc=norm(r[di]), qty=Number(r[qi]??0); if(!code&&!desc||!(qty>0))continue;
+      lines.push({order:oi>=0?norm(r[oi]):"",code,desc,barcode:bi>=0?norm(r[bi]):"",qty});
+    }
+    const map={};
+    for(const x of lines){
+      const k=x.code+"|"+x.barcode+"|"+x.desc;
+      if(!map[k])map[k]={...x};else map[k].qty+=x.qty;
+    }
+    start(Object.values(map));
+  }catch(e){console.error(e);alert("I could not read this Excel file. Please use the original Sage XLSX export.");}
+}
+function finish(){
+  closeCamera(); $("fill").style.width="100%"; $("prog").textContent="All products picked";
+  $("finish").classList.remove("hidden"); $("finishText").textContent="Order "+orderNo+" passed all picking checks.";
+}
+$("importBtn").onclick=loadFile;
+$("demoBtn").onclick=()=>start(DEMO);
+$("cameraBtn").onclick=startCamera;
+$("manualBarcodeBtn").onclick=manualBarcode;
+$("checkManualBtn").onclick=()=>barcode($("manual").value);
+$("manualPickBtn").onclick=manualPick;
+$("nextBtn").onclick=()=>location.reload();
+if("serviceWorker" in navigator) window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+</script>
+</body></html>
